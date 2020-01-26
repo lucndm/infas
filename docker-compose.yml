@@ -1,0 +1,163 @@
+version: '3.7'
+services: 
+    logdna:
+        image: logdna/logspout:latest
+        container_name: logdna
+        restart: always
+        volumes: 
+            - /var/run/docker.sock:/var/run/docker.sock
+        env_file: 
+            - ./home.env
+        networks: 
+            default:
+                ipv4_address: 172.16.10.2
+        dns: 
+            - 172.16.10.100
+    traefik:
+        image: "traefik:${TRAEFIK_VERSION}"
+        container_name: traefik
+        restart: unless-stopped
+        domainname: ${DOMAIN}
+        networks: 
+            - default
+            - traefik_proxy
+        volumes: 
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+            # - ${CONFIG}/traefik/acme.json:/etc/traefik/acme/acme.json
+            # - ${CONFIG}/traefik/traefik.toml:/etc/traefik/traefik.toml
+        ports: 
+            - "80:80"
+            # - "443:443"
+        labels: 
+            - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)"
+            - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+
+        command: 
+            - --entrypoints.web.address=:80
+            - --providers.docker
+            - --api.insecure 
+    portainer:
+        image: "portainer/portainer:${PORTAINER_VERSION}"
+        container_name: portainer
+        networks: 
+            - default
+            - traefik_proxy
+        volumes: 
+            - /var/run/docker.sock:/var/run/docker.sock
+            - ${DATA}/portainer:/data
+        env_file:
+            - ./home.env 
+        labels:
+            - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)"
+            - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+    influxdb:
+        image: "influxdb:${INFLUXDB_VERSION}"
+        container_name: influxdb
+        restart: always
+        networks: 
+            - default
+            - traefik_proxy
+        volumes:
+            - ${DATA}/influxdb:/var/lib/influxdb
+        env_file: 
+            - ./home.env
+    chronograf:
+        image: "chronograf:${CHRONOGRAF_VERSION}"
+        container_name: chronograf
+        volumes: 
+            - ${CONFIG}/chronograf:/var/lib/chronograf
+        depends_on: 
+            - influxdb
+        labels:
+            - "traefik.http.routers.chronograf.rule=Host(`chronograf.${DOMAIN}`)"
+            - "traefik.http.services.chronograf.loadbalancer.server.port=8888"
+    kapacitor:
+        image: "kapacitor:${KAPACITOR_VERSION}"
+        container_name: kapacitor
+        restart: always
+        volumes: 
+            - ${DATA}/kapacitor:/var/lib/kapacitor
+            - ${CONFIG}/kapacitor/kapacitor.conf:/etc/kapacitor/kapacitor.conf:ro
+        depends_on: 
+            - influxdb
+    telegraf:
+        image: "telegraf:${TELEGRAF_VERSION}"
+        container_name: telegraf_docker
+        restart: always
+        volumes: 
+            - ${CONFIG}/telegraf/telegraf.conf:/etc/telegraf/telegraf.conf:ro
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+        depends_on: 
+            - influxdb
+    grafana:
+        image: "grafana/grafana:${GRAFANA_VERSION}"
+        container_name: grafana
+        volumes: 
+            - ${CONFIG}/grafana:/var/lib/grafana
+        depends_on:
+            - influxdb
+        environment: 
+            - GF_SECURITY_ADMIN_USER=${GRAFANA_USERNAME}
+            - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+        labels:
+            - "traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)"
+            - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    mysql:
+        image: "mysql:${MYSQL_VERSION}"
+        container_name: mysql_dev
+        ports: 
+            - "3306:3306"
+        volumes: 
+            - ${DATA}/mysql:/var/lib/mysql
+        environment: 
+            - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+            - MYSQL_ALLOW_EMPTY_PASSWORD=yes
+    postgres:
+        image: "postgres:${POSTGRES_VERSION}"
+        container_name: postgres_dev
+        ports: 
+            - "5432:5432"
+        volumes: 
+            - ${DATA}/postgresql:/var/lib/postgresql/data
+            - ${CONFIG}/mysql:/etc/mysql/conf.d
+        environment: 
+            - POSTGRES_PASSWORD:${POSTGRES_PASSWORD} 
+    adguard:
+        container_name: adguard_home
+        image: "adguard/adguardhome:${ADGUARD_HOME_VERSION}"
+        restart: always
+        networks: 
+            default:
+                ipv4_address: 172.16.10.100
+            # - traefik_proxy
+        volumes: 
+            - ${CONFIG}/adguardhome:/opt/adguardhome/conf
+            - ${DATA}/adguardhome:/opt/adguardhome/work
+        labels:
+            - "traefik.http.routers.adguard.rule=Host(`adguard.${DOMAIN}`)"
+            # - "traefik.http.services.adguard.loadbalancer.server.port=3000"
+            - "traefik.http.services.adguard.loadbalancer.server.port=80"
+    code-server:
+        container_name: code
+        image: codercom/code-server:${CODE_SERVER_VERSION}
+        volumes: 
+            - ${CONFIG}/code-server:/home/coder/.local/share/code-server
+            - ./workspaces:/home/coder/project
+        labels:
+            - "traefik.http.routers.code.rule=Host(`code.${DOMAIN}`)"
+            - "traefik.http.services.code.loadbalancer.server.port=8080"
+        
+        # environment: 
+            # - PASSWORD:${CODE_SERVER_PASSWORD}
+        command: --auth none
+
+networks: 
+    traefik_proxy:
+        external: 
+            name: traefik_proxy
+        
+    default:
+        driver: bridge
+        ipam:
+            config:
+                - subnet: 172.16.10.0/24
