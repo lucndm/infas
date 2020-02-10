@@ -8,11 +8,6 @@ services:
             - /var/run/docker.sock:/var/run/docker.sock
         env_file: 
             - ./home.env
-        networks: 
-            default:
-                ipv4_address: 172.16.10.2
-        dns: 
-            - 172.16.10.100
     traefik:
         image: "traefik:${TRAEFIK_VERSION}"
         container_name: traefik
@@ -50,6 +45,12 @@ services:
         labels:
             - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)"
             - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+    redis:
+        image: redis:5-alpine
+        container_name: redis
+        ports: 
+            - "6379:6379"
+        restart: always
     influxdb:
         image: "influxdb:${INFLUXDB_VERSION}"
         container_name: influxdb
@@ -115,6 +116,7 @@ services:
     postgres:
         image: "postgres:${POSTGRES_VERSION}"
         container_name: postgres_dev
+        command: postgres -c 'max_connections=500'
         ports: 
             - "5432:5432"
         volumes: 
@@ -138,18 +140,25 @@ services:
             # - "traefik.http.services.adguard.loadbalancer.server.port=3000"
             - "traefik.http.services.adguard.loadbalancer.server.port=80"
     code-server:
-        container_name: code
-        image: codercom/code-server:${CODE_SERVER_VERSION}
+        container_name: code-server
+        image: minhluc/docker-workspaces:latest
+        command: bash -c "sudo service ssh start && tail -f /dev/null"
+        restart: always
+        ports: 
+            - "2222:22"
         volumes: 
-            - ${CONFIG}/code-server:/home/coder/.local/share/code-server
-            - ./workspaces:/home/coder/project
-        labels:
-            - "traefik.http.routers.code.rule=Host(`code.${DOMAIN}`)"
-            - "traefik.http.services.code.loadbalancer.server.port=8080"
-        
-        # environment: 
-            # - PASSWORD:${CODE_SERVER_PASSWORD}
-        command: --auth none
+            - ~/workspaces:/home/$USER/workspaces
+            - /var/run/docker.sock:/var/run/docker.sock
+            - ~/.config/Code/User:/home/$USER/.local/share/code-server/User
+            - ~/.vscode/extensions:/home/$USER/.local/share/code-server/extensions
+            - ~/.zsh_history:${USER_HOME}/.zsh_history
+            - ~/.ssh:${USER_HOME}/.ssh:ro
+        user: "1000:1000"
+        networks: 
+            default:
+                ipv4_address: 172.16.10.101
+        dns: 
+            - 172.16.10.100
 
 networks: 
     traefik_proxy:
